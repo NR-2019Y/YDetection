@@ -25,29 +25,10 @@ def fast_conv2d_np(img: np.ndarray, kernel: np.ndarray, bias: Optional[np.ndarra
     x = np.lib.stride_tricks.as_strided(img, (batch_size, ic, kh, kw, oh, ow),
                                         (istepb, istepc, isteph * dh, istepw * dw, isteph * sh, istepw * sw),
                                         writeable=False)
-    if batch_size == 1:
-        conv_result = np.expand_dims(np.tensordot(kernel, np.squeeze(x, 0), ([1, 2, 3], [0, 1, 2])), 0)
-        return conv_result if bias is None else conv_result + bias[None, :, None, None]
-    # conv_result = np.transpose(np.tensordot(kernel, x, ([1, 2, 3], [1, 2, 3])), (1, 0, 2, 3))
-    # return conv_result if bias is None else conv_result + bias[None, :, None, None]
-    if bias is None:
-        result = np.zeros((batch_size, oc, oh * ow), dtype=np.float32)
-        kernel = kernel.reshape((oc, ic * kh * kw))
-        for i in range(batch_size):
-            xi = x[i].reshape(ic * kh * kw, oh * ow)
-            np.matmul(kernel, xi, out=result[i])
-        result = result.reshape((batch_size, oc, oh, ow))
-    else:
-        # result = np.tile(bias[None, :, None, None], (batch_size, 1, oh, ow))
-        # for i in range(batch_size):
-        #     result[i] += np.tensordot(kernel, x[i], ([1, 2, 3], [0, 1, 2]))
-        result = np.zeros((batch_size, oc, oh * ow), dtype=np.float32)
-        kernel = kernel.reshape((oc, ic * kh * kw))
-        for i in range(batch_size):
-            xi = x[i].reshape(ic * kh * kw, oh * ow)
-            np.matmul(kernel, xi, out=result[i])
-        result = result.reshape((batch_size, oc, oh, ow)) + bias[None, :, None, None]
-    return result
+    conv_result = np.matmul(
+        kernel.reshape(1, oc, ic * kh * kw),
+        x.reshape(batch_size, ic * kh * kw, oh * ow)).reshape(batch_size, oc, oh, ow)
+    return conv_result if bias is None else conv_result + bias[None, :, None, None]
 
 
 def fast_conv2d_cpp(img: np.ndarray, kernel: np.ndarray, bias: Optional[np.ndarray],
@@ -90,9 +71,9 @@ def _check_conv():
     from torch import nn
     import torch.nn.functional as F
 
-    # b, ic, ih, iw = 16, 3, 640, 640
+    b, ic, ih, iw = 16, 3, 640, 640
     # b, ic, ih, iw = 1, 32, 640, 640
-    b, ic, ih, iw = 1, 128, 340, 300
+    # b, ic, ih, iw = 1, 128, 340, 300
     oc, kh, kw = 256, 7, 7
     # b, ic, ih, iw = 32, 32, 200, 203
     # oc, kh, kw = 64, 7, 7
