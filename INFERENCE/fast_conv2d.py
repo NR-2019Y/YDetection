@@ -46,6 +46,7 @@ def fast_conv2d_cpp(img: np.ndarray, kernel: np.ndarray, bias: Optional[np.ndarr
     ow = (iw + pad_left + pad_right - dkw) // sw + 1
 
     result = np.empty((batch_size, oc, oh, ow), dtype=np.float32)
+    # result = np.zeros((batch_size, oc, oh, ow), dtype=np.float32)
     c_float_p = ctypes.POINTER(ctypes.c_float)
 
     img = np.ascontiguousarray(img)
@@ -75,10 +76,12 @@ def _check_conv():
 
     num_threads = int(sys.argv[1])
 
-    b, ic, ih, iw = 16, 3, 320, 320
+    # b, ic, ih, iw = 16, 32, 320, 320
     # b, ic, ih, iw = 8, 32, 320, 300
-    # b, ic, ih, iw = 1, 128, 340, 300
-    oc, kh, kw = 256, 3, 3
+    b, ic, ih, iw = 1, 256, 340, 300
+    # b, ic, ih, iw = 8, 32, 340, 300
+    # oc, kh, kw = 256, 3, 3
+    oc, kh, kw = 512, 5, 5
     # b, ic, ih, iw = 32, 32, 200, 203
     # oc, kh, kw = 64, 7, 7
     stride = 2
@@ -86,8 +89,8 @@ def _check_conv():
 
     for _ in range(10):
         kernel = np.random.rand(oc, ic, kh, kw).astype(np.float32)
-        bias = np.random.rand(oc).astype(np.float32)
-        # bias = None
+        # bias = np.random.rand(oc).astype(np.float32)
+        bias = None
         X = np.random.rand(b, ic, ih, iw).astype(np.float32)
         tic = time.time()
         p1 = F.conv2d(torch.from_numpy(X),

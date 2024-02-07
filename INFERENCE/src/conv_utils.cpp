@@ -1,5 +1,9 @@
 #include <algorithm>
+#ifdef MKL
+#include <mkl/mkl.h>
+#else
 #include <cblas.h>
+#endif
 #include <vector>
 
 extern "C" void im2col(const float* _image, float* _im2col, /*zeros*/

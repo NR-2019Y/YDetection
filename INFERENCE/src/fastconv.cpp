@@ -1,16 +1,12 @@
 #include <algorithm>
+#ifdef MKL
+#include <mkl/mkl.h>
+#else
 #include <cblas.h>
+#endif
 #include <vector>
-// https://github.com/BVLC/caffe/blob/master/LICENSE
 
-extern "C" inline void scopy(const int n, const float* x, const int incx, float* y, const int incy)
-{
-    for (int i = 0; i < n; ++i) {
-        *y = *x;
-        x += incx;
-        y += incy;
-    }
-}
+// https://github.com/BVLC/caffe/blob/master/LICENSE
 
 extern "C" void im2col_cpu(const float* _image, float* _im2col, /*fill*/
     const int bic, const int ih, const int iw,
@@ -62,7 +58,7 @@ extern "C" void im2col_cpu(const float* _image, float* _im2col, /*fill*/
                 int ostepoh_i3s = ostepoh_min + i3min;
                 int istep_i0i1i2_i3s = istep_i0 + i1 * dw + istep_i2min + i3min * sw + pad_shift;
                 for (int i2 = i2min; i2 < i2max; ++i2) {
-                    scopy(i3max - i3min, pimage + istep_i0i1i2_i3s, sw, curr_pim2col + ostepoh_i3s, 1);
+                    cblas_scopy(i3max - i3min, pimage + istep_i0i1i2_i3s, sw, curr_pim2col + ostepoh_i3s, 1);
                     // cblas_scopy(i3max - i3min, pimage + (i0 * dh + i2 * sh - pad_top) * image_steph + i1 * dw + i3min * sw - pad_left, sw,
                     //     curr_pim2col + i2 * im2col_stepoh + i3min, 1);
                     istep_i0i1i2_i3s += simage_steph;
@@ -114,9 +110,9 @@ extern "C" void conv2d_cpu(const float* _image, const float* _weight, const floa
         if (_bias) {
             for (int i = 0; i < oc; ++i)
                 std::fill_n(presult + i * cstep, cstep, _bias[i]);
-            cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, GEMM_M, GEMM_N, GEMM_K,
-                1.f, _weight, LDA, pim2col, LDB, beta, presult, LDC);
         }
+        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, GEMM_M, GEMM_N, GEMM_K,
+            1.f, _weight, LDA, pim2col, LDB, beta, presult, LDC);
         pim2col += im2col_stepb;
         presult += result_stepb;
     }
