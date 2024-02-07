@@ -3,12 +3,22 @@
 #include <vector>
 // https://github.com/BVLC/caffe/blob/master/LICENSE
 
+extern "C" inline void scopy(const int n, const float* x, const int incx, float* y, const int incy)
+{
+    for (int i = 0; i < n; ++i) {
+        *y = *x;
+        x += incx;
+        y += incy;
+    }
+}
+
 extern "C" void im2col_cpu(const float* _image, float* _im2col, /*fill*/
     const int bic, const int ih, const int iw,
     const int kh, const int kw,
     const int sh, const int sw,
     const int dh, const int dw,
-    const int pad_top, const int pad_bottom, const int pad_left, const int pad_right)
+    const int pad_top, const int pad_bottom, const int pad_left, const int pad_right,
+    const int num_threads)
 {
     const int dkh = kh + (kh - 1) * (dh - 1);
     const int dkw = kw + (kw - 1) * (dw - 1);
@@ -21,8 +31,8 @@ extern "C" void im2col_cpu(const float* _image, float* _im2col, /*fill*/
     // 不考虑pad时
     // foreach bic
     // im2col[i0, i1, i2, i3] = image[i0*dh+i2*sh, i1*dw+i3*sw]
-    const float* pimage = _image;
-    float* pim2col = _im2col;
+    // const float* pimage = _image;
+    // float* pim2col = _im2col;
 
     const int image_steph = iw;
     const int image_stepbic = ih * image_steph;
@@ -31,11 +41,15 @@ extern "C" void im2col_cpu(const float* _image, float* _im2col, /*fill*/
 
     const int im2col_stepoh = ow;
     const int im2col_stepkw = oh * im2col_stepoh;
-    // const int im2col_stepkh = kw * im2col_stepkw;
-    // const int im2col_stepbic = kh * im2col_stepkh;
+    const int im2col_stepkh = kw * im2col_stepkw;
+    const int im2col_stepbic = kh * im2col_stepkh;
 
     const int pad_shift = -pad_top * image_steph - pad_left;
-    for (int _ = 0; _ < bic; ++_) {
+#pragma omp parallel for num_threads(num_threads)
+    for (int q = 0; q < bic; ++q) {
+        const float* pimage = _image + q * image_stepbic;
+        float* pim2col = _im2col + q * im2col_stepbic;
+        float* curr_pim2col = pim2col;
         for (int i0 = 0; i0 < kh; ++i0) {
             const int i2min = std::max(0, (pad_top - i0 * dh + sh - 1) / sh);
             const int i2max = std::min(oh, (ih + pad_top - i0 * dh + sh - 1) / sh);
@@ -48,16 +62,15 @@ extern "C" void im2col_cpu(const float* _image, float* _im2col, /*fill*/
                 int ostepoh_i3s = ostepoh_min + i3min;
                 int istep_i0i1i2_i3s = istep_i0 + i1 * dw + istep_i2min + i3min * sw + pad_shift;
                 for (int i2 = i2min; i2 < i2max; ++i2) {
-                    cblas_scopy(i3max - i3min, pimage + istep_i0i1i2_i3s, sw, pim2col + ostepoh_i3s, 1);
+                    scopy(i3max - i3min, pimage + istep_i0i1i2_i3s, sw, curr_pim2col + ostepoh_i3s, 1);
                     // cblas_scopy(i3max - i3min, pimage + (i0 * dh + i2 * sh - pad_top) * image_steph + i1 * dw + i3min * sw - pad_left, sw,
-                    //     pim2col + i2 * im2col_stepoh + i3min, 1);
+                    //     curr_pim2col + i2 * im2col_stepoh + i3min, 1);
                     istep_i0i1i2_i3s += simage_steph;
                     ostepoh_i3s += im2col_stepoh;
                 }
-                pim2col += im2col_stepkw;
+                curr_pim2col += im2col_stepkw;
             }
         }
-        pimage += image_stepbic;
     }
 }
 
@@ -65,7 +78,7 @@ extern "C" void conv2d_cpu(const float* _image, const float* _weight, const floa
     const int b, const int ic, const int ih, const int iw,
     const int oc, const int kh, const int kw,
     const int sh, const int sw, const int dh, const int dw,
-    const int pad_top, const int pad_bottom, const int pad_left, const int pad_right)
+    const int pad_top, const int pad_bottom, const int pad_left, const int pad_right, const int num_threads)
 {
     const int dkh = kh + (kh - 1) * (dh - 1);
     const int dkw = kw + (kw - 1) * (dw - 1);
@@ -75,7 +88,7 @@ extern "C" void conv2d_cpu(const float* _image, const float* _weight, const floa
     // im2col: [b, ic, kh, kw, oh, ow]
     std::vector<float> v_im2col(b * ic * kh * kw * oh * ow, 0.f);
     im2col_cpu(_image, v_im2col.data(), b * ic, ih, iw, kh, kw, sh, sw, dh, dw,
-        pad_top, pad_bottom, pad_left, pad_right);
+        pad_top, pad_bottom, pad_left, pad_right, num_threads);
 
     const int im2col_stepb = ic * kh * kw * oh * ow;
     const int result_stepb = oc * oh * ow;

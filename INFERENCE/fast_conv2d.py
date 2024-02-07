@@ -33,7 +33,8 @@ def fast_conv2d_np(img: np.ndarray, kernel: np.ndarray, bias: Optional[np.ndarra
 
 def fast_conv2d_cpp(img: np.ndarray, kernel: np.ndarray, bias: Optional[np.ndarray],
                     stride: size_2_t = 1, dilation: size_2_t = 1,
-                    pad_top: int = 0, pad_bottom: int = 0, pad_left: int = 0, pad_right: int = 0) -> np.ndarray:
+                    pad_top: int = 0, pad_bottom: int = 0, pad_left: int = 0, pad_right: int = 0,
+                    num_threads: int = 4) -> np.ndarray:
     batch_size, _ic, ih, iw = img.shape
     oc, ic, kh, kw = kernel.shape
     assert _ic == ic
@@ -61,20 +62,23 @@ def fast_conv2d_cpp(img: np.ndarray, kernel: np.ndarray, bias: Optional[np.ndarr
                      ctypes.c_int(oc), ctypes.c_int(kh), ctypes.c_int(kw),
                      ctypes.c_int(sh), ctypes.c_int(sw), ctypes.c_int(dh), ctypes.c_int(dw),
                      ctypes.c_int(pad_top), ctypes.c_int(pad_bottom),
-                     ctypes.c_int(pad_left), ctypes.c_int(pad_right))
+                     ctypes.c_int(pad_left), ctypes.c_int(pad_right), ctypes.c_int(num_threads))
     return result
 
 
 def _check_conv():
     import time
     import torch
+    import sys
     from torch import nn
     import torch.nn.functional as F
 
-    b, ic, ih, iw = 16, 3, 640, 640
-    # b, ic, ih, iw = 1, 32, 640, 640
+    num_threads = int(sys.argv[1])
+
+    b, ic, ih, iw = 16, 3, 320, 320
+    # b, ic, ih, iw = 8, 32, 320, 300
     # b, ic, ih, iw = 1, 128, 340, 300
-    oc, kh, kw = 256, 7, 7
+    oc, kh, kw = 256, 3, 3
     # b, ic, ih, iw = 32, 32, 200, 203
     # oc, kh, kw = 64, 7, 7
     stride = 2
@@ -99,7 +103,8 @@ def _check_conv():
         print(np.abs(p1 - p2).max(), ratio.max(), ratio.min(), np.allclose(p1, p2))
 
         tic = time.time()
-        p2 = fast_conv2d_cpp(X, kernel, bias, stride, pad_top=pad, pad_bottom=pad, pad_left=pad, pad_right=pad)
+        p2 = fast_conv2d_cpp(X, kernel, bias, stride, pad_top=pad, pad_bottom=pad, pad_left=pad, pad_right=pad,
+                             num_threads=num_threads)
         print(f"cpp: {time.time() - tic} sec")
         ratio = p1 / p2
         print(np.abs(p1 - p2).max(), ratio.max(), ratio.min(), np.allclose(p1, p2))
