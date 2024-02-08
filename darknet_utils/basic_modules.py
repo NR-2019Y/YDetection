@@ -335,7 +335,6 @@ def BuildDarknetInferenceModel(cfg_file: str, weight_file: str) -> DarknetModel:
             fp.read(8)
         else:
             fp.read(4)
-        layers = []
 
         section_iter = iter(all_sections)
         net_section = next(section_iter)
