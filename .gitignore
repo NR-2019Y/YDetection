@@ -4,4 +4,5 @@ __pycache__/
 .vscode
 *.so
 INFERENCE/_test_blas/
+/.run/
 
