@@ -1,5 +1,5 @@
-import darknet
-from basic_modules import BuildDarknetInferenceModel
+from darknet_utils import darknet
+from darknet_utils.basic_modules import BuildDarknetInferenceModel
 import ctypes
 import glob
 import numpy as np
@@ -23,8 +23,10 @@ def ptr_to_ndarray(ptr, size):
 # WEIGHT_FILE = '/home/a/PROJ/AlexeyAB/ori_darknet/darknet/weights/yolov2-tiny.weights'
 # CFG_FILE = '/home/a/PROJ/AlexeyAB/ori_darknet/darknet/cfg/yolov2-voc.cfg'
 # WEIGHT_FILE = '/home/a/PROJ/AlexeyAB/ori_darknet/darknet/weights/yolov2-voc.weights'
-CFG_FILE = '/home/a/PROJ/AlexeyAB/ori_darknet/darknet/cfg/yolov2.cfg'
-WEIGHT_FILE = '/home/a/PROJ/AlexeyAB/ori_darknet/darknet/weights/yolov2.weights'
+# CFG_FILE = '/home/a/PROJ/AlexeyAB/ori_darknet/darknet/cfg/yolov2.cfg'
+# WEIGHT_FILE = '/home/a/PROJ/AlexeyAB/ori_darknet/darknet/weights/yolov2.weights'
+CFG_FILE = '/home/a/PROJ/AlexeyAB/ori_darknet/darknet/cfg/yolov3-tiny.cfg'
+WEIGHT_FILE = '/home/a/PROJ/AlexeyAB/ori_darknet/darknet/weights/yolov3-tiny.weights'
 IMAGES_PATH = glob.glob('/mnt/d/GIT_REPO/datasets/VOC2007/images/*.jpg')
 
 net = darknet.load_net(
@@ -47,7 +49,7 @@ for imgp in IMAGES_PATH:
 
     tic = time.time()
     imr_arr = ptr_to_ndarray(imr.data, imr.c * imr.w * imr.h). \
-        reshape(1, 3, input_width, input_height)
+        reshape((1, 3, input_width, input_height))
     imr_tensor = torch.from_numpy(imr_arr)
     with torch.no_grad():
         pred_torch = net_torch(imr_tensor).ravel().numpy()
