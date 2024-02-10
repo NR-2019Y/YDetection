@@ -100,7 +100,7 @@ def yolov3_dets_and_loss(preds: torch.Tensor, target_list: Sequence[torch.Tensor
     (bid, btargets_yidx, btargets_xidx, iou_scores_max_index), btargets = \
         _assign_targets_to_anchors(anchors_scale, target_list, h, w, valid_index_start, valid_index_end)
     delta_obj[bid, btargets_yidx, btargets_xidx, iou_scores_max_index] = \
-        1.0 - preds[bid, btargets_yidx, btargets_xidx, iou_scores_max_index, 4]
+        1.0 - preds_obj[bid, btargets_yidx, btargets_xidx, iou_scores_max_index]
 
     delta_box_target_assign_scale = 2.0 - btargets[..., 2] * btargets[..., 3]
     delta_box[bid, btargets_yidx, btargets_xidx, iou_scores_max_index, :2] = \
