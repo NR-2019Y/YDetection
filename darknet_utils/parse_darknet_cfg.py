@@ -6,7 +6,7 @@ class Section(NamedTuple):
     options: Dict[str, str]
 
 
-def parse_darknet_cfg(cfg_file: str) -> List[Section]:
+def parse_darknet_cfg(cfg_file: str, net_section_only: bool = False) -> List[Section]:
     options = []
     with open(cfg_file, 'r') as f:
         for line in f:
@@ -14,6 +14,9 @@ def parse_darknet_cfg(cfg_file: str) -> List[Section]:
             if not line or line.startswith('#') or line.startswith(';'):
                 continue
             if line.startswith('['):
+                if net_section_only and len(options):
+                    assert options[0].stype == "[net]"
+                    return options
                 current = Section(stype=line, options={})
                 options.append(current)
             else:
@@ -21,4 +24,17 @@ def parse_darknet_cfg(cfg_file: str) -> List[Section]:
                 options[-1].options[key.strip()] = value.strip()
     return options
 
-# print(parse_darknet_cfg('/home/a/PROJ/AlexeyAB/darknet/cfg/yolov1/tiny-yolo.cfg'))
+
+class NetConfig(NamedTuple):
+    input_height: int
+    input_width: int
+    input_channels: int
+
+
+def get_net_config(cfg_file: str):
+    net_section = parse_darknet_cfg(cfg_file, net_section_only=True)[0]
+    return NetConfig(
+        input_height=int(net_section.options['height']),
+        input_width=int(net_section.options['width']),
+        input_channels=int(net_section.options['channels'])
+    )
