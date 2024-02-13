@@ -1,7 +1,31 @@
+import math
+
 import torch
 from typing import Sequence, Tuple, Dict
 from .utils import broadcast_compute_box_iou, broadcast_compute_wh_iou
 from .utils import cxcywh2xyxy, cxcywh2xyxy2
+
+
+# src/data.c
+# fill_truth_region
+def _encode_yolov1_targets(target_list: Sequence[torch.Tensor], h: int, w: int, num_classes: int) -> torch.Tensor:
+    device = target_list[0].device
+    batch_size: int = len(target_list)
+    repeats = torch.tensor([len(t) for t in target_list], dtype=torch.long, device=device)
+    bid = torch.arange(batch_size, device=device).repeat_interleave(repeats, 0)  # [n_targets]
+    btargets = torch.cat(target_list, dim=0)  # type: ignore
+    btargets_x = btargets[:, 0].mul(w)
+    btargets_y = btargets[:, 1].mul(h)
+    btargets_xidx = btargets_x.long().clamp_(0, w - 1)
+    btargets_yidx = btargets_y.long().clamp_(0, h - 1)
+    btargets_xy_to_center = torch.stack((btargets_x, btargets_y), dim=-1) % 1.0
+    targets = torch.zeros((batch_size, h, w, 5 + num_classes), dtype=torch.float32, device=device)
+    # targets: [batch_size, h, w, 5 + num_classes] 5+nc: obj + cls + cx, cy, w, h
+    targets[bid, btargets_yidx, btargets_xidx, 0] = 1.0
+    targets[bid, btargets_yidx, btargets_xidx, 1 + btargets[..., 4].long()] = 1.0
+    targets[bid, btargets_yidx, btargets_xidx, 1 + num_classes:3 + num_classes] = btargets_xy_to_center
+    targets[bid, btargets_yidx, btargets_xidx, 3 + num_classes:] = btargets[:, 2:4]
+    return targets
 
 
 def _encode_targets(target_list: Sequence[torch.Tensor]) -> torch.Tensor:
@@ -12,6 +36,139 @@ def _encode_targets(target_list: Sequence[torch.Tensor]) -> torch.Tensor:
     for i, target in enumerate(target_list):
         targets[i, :len(target)] = target
     return targets
+
+
+# src/detection_layer.c
+def yolov1_loss(preds: torch.Tensor, target_list: Sequence[torch.Tensor],
+                num: int, num_classes: int,
+                obj_scale: float, no_obj_scale: float, cls_scale: float, coord_scale: float,
+                use_sqrt: bool, rescore: bool):
+    batch_size, h, w, _ = preds.shape
+    # preds: [batch_size, h, w, num_classes + num + num * 4]
+    # targets: [batch_size, h, w, obj + cls + coords(4 = cx, cy, w, h)]
+
+    sqrt_no_obj_scale = math.sqrt(no_obj_scale)
+    sqrt_obj_scale = math.sqrt(obj_scale)
+
+    preds = preds.reshape(batch_size * h * w, num_classes + num + num * 4)
+    targets = _encode_yolov1_targets(target_list, h=h, w=w, num_classes=num_classes).view(-1, num_classes + 5)
+    obj_mask = targets[:, 0] != 0  # [batch_size * h * w]
+
+    # delta_obj: [batch_size * h * w, 2]
+    delta_obj = sqrt_no_obj_scale * (-preds[:, num_classes:num_classes + num])
+
+    preds_filobj = preds[obj_mask]  # [nobj, num_classes + num * 5]
+    targets_filobj = targets[obj_mask]  # [nobj, num_classes + 5]
+
+    loss_cls = (0.5 * cls_scale) * \
+               ((targets_filobj[:, 1:1 + num_classes] - preds_filobj[:, :num_classes]).square().sum())
+
+    wh_tensor = torch.tensor([w, h], dtype=torch.float32, device=preds.device)
+    preds_filobj_box = preds_filobj[:, num_classes + num:].reshape(-1, num, 4)
+    if use_sqrt:
+        preds_filobj_wh = preds_filobj_box[..., 2:4].square()
+    else:
+        preds_filobj_wh = preds_filobj_box[..., 2:4]
+    preds_filobj_xyxy = cxcywh2xyxy2(preds_filobj_box[..., 0:2].div(wh_tensor), preds_filobj_wh)
+    # preds_filobj_xyxy: [nobj, num, 4]
+    targets_filobj_xyxy = cxcywh2xyxy2(
+        targets_filobj[:, 1 + num_classes:3 + num_classes].div(wh_tensor),  # [nobj, 2]
+        targets_filobj[:, 3 + num_classes:]  # [nobj, 2]
+    )  # [nobj, 4]
+    with torch.no_grad():
+        iou_mat = broadcast_compute_box_iou(preds_filobj_xyxy, targets_filobj_xyxy[:, None, :])  # [nobj, num]
+        iou_best_val, iou_best_n = iou_mat.max(-1)
+
+    _range = torch.arange(len(preds_filobj), dtype=torch.long, device=preds.device)
+    preds_filobj_obj = preds_filobj[:, num_classes:num_classes + num]  # [nobj, num]
+    if rescore:
+        delta_obj[_range, iou_best_n] = \
+            sqrt_obj_scale * (iou_best_val - preds_filobj_obj[_range, iou_best_n])
+    else:
+        delta_obj[_range, iou_best_n] = \
+            sqrt_obj_scale * (1.0 - preds_filobj_obj[_range, iou_best_n])
+
+    loss_obj = 0.5 * (delta_obj.square().sum())
+    if use_sqrt:
+        loss_box_cxcy = (0.5 * coord_scale) * \
+                        ((targets_filobj[:, 1 + num_classes:3 + num_classes] -
+                          preds_filobj_box[_range, iou_best_n, 0:2]).square().sum())
+        loss_box_wh = (0.5 * coord_scale) * \
+                      ((targets_filobj[:, 3 + num_classes:].sqrt() -
+                        preds_filobj_box[_range, iou_best_n, 2:4]).square().sum())
+        loss_box = loss_box_cxcy + loss_box_wh
+    else:
+        loss_box = (0.5 * coord_scale) * \
+                   ((targets_filobj[:, 1 + num_classes:] - preds_filobj_box[_range, iou_best_n]).square().sum())
+    batch_scale = 1.0 / batch_size
+    return batch_scale * loss_box, batch_scale * loss_obj, batch_scale * loss_cls
+
+
+# # src/detection_layer.c
+# def yolov1_loss(preds: torch.Tensor, target_list: Sequence[torch.Tensor],
+#                 num: int, num_classes: int,
+#                 obj_scale: float, no_obj_scale: float, cls_scale: float, coord_scale: float,
+#                 use_sqrt: bool, rescore: bool):
+#     batch_size, h, w, _ = preds.shape
+#     # preds: [batch_size, h, w, num_classes + num + num * 4]
+#     # targets: [batch_size, h, w, obj + cls + coords(4 = cx, cy, w, h)]
+#
+#     sqrt_no_obj_scale = math.sqrt(no_obj_scale)
+#     sqrt_obj_scale = math.sqrt(obj_scale)
+#
+#     preds = preds.reshape(batch_size * h * w, num_classes + num + num * 4)
+#     targets = _encode_yolov1_targets(target_list, h=h, w=w, num_classes=num_classes).view(-1, num_classes + 5)
+#     obj_mask = targets[:, 0] != 0  # [batch_size * h * w]
+#
+#     preds_noobj = preds[~obj_mask]
+#     loss_noobj = (0.5 * no_obj_scale) * (preds_noobj[:, num_classes:num_classes + num].square().sum())
+#
+#     preds_filobj = preds[obj_mask]  # [nobj, num_classes + num * 5]
+#     targets_filobj = targets[obj_mask]  # [nobj, num_classes + 5]
+#
+#     loss_cls = (0.5 * cls_scale) * \
+#                ((targets_filobj[:, 1:1 + num_classes] - preds_filobj[:, :num_classes]).square().sum())
+#
+#     wh_tensor = torch.tensor([w, h], dtype=torch.float32, device=preds.device)
+#     preds_filobj_box = preds_filobj[:, num_classes + num:].reshape(-1, num, 4)
+#     if use_sqrt:
+#         preds_filobj_wh = preds_filobj_box[..., 2:4].square()
+#     else:
+#         preds_filobj_wh = preds_filobj_box[..., 2:4]
+#     preds_filobj_xyxy = cxcywh2xyxy2(preds_filobj_box[..., 0:2].div(wh_tensor), preds_filobj_wh)
+#     # preds_filobj_xyxy: [nobj, num, 4]
+#     targets_filobj_xyxy = cxcywh2xyxy2(
+#         targets_filobj[:, 1 + num_classes:3 + num_classes].div(wh_tensor),  # [nobj, 2]
+#         targets_filobj[:, 3 + num_classes:]  # [nobj, 2]
+#     )  # [nobj, 4]
+#     with torch.no_grad():
+#         iou_mat = broadcast_compute_box_iou(preds_filobj_xyxy, targets_filobj_xyxy[:, None, :])  # [nobj, num]
+#         iou_best_val, iou_best_n = iou_mat.max(-1)
+#
+#     _range = torch.arange(len(preds_filobj), dtype=torch.long, device=preds.device)
+#     preds_filobj_obj = preds_filobj[:, num_classes:num_classes + num]  # [nobj, num]
+#
+#     if rescore:
+#         loss_hasobj = (0.5 * obj_scale) * \
+#                       ((iou_best_val - preds_filobj_obj[_range, iou_best_n]).square().sum())
+#     else:
+#         loss_hasobj = (0.5 * obj_scale) * \
+#                       ((1.0 - preds_filobj_obj[_range, iou_best_n]).square().sum())
+#
+#     loss_obj = loss_noobj + loss_hasobj
+#     if use_sqrt:
+#         loss_box_cxcy = (0.5 * coord_scale) * \
+#                         ((targets_filobj[:, 1 + num_classes:3 + num_classes] -
+#                           preds_filobj_box[_range, iou_best_n, 0:2]).square().sum())
+#         loss_box_wh = (0.5 * coord_scale) * \
+#                       ((targets_filobj[:, 3 + num_classes:].sqrt() -
+#                         preds_filobj_box[_range, iou_best_n, 2:4]).square().sum())
+#         loss_box = loss_box_cxcy + loss_box_wh
+#     else:
+#         loss_box = (0.5 * coord_scale) * \
+#                    ((targets_filobj[:, 1 + num_classes:] - preds_filobj_box[_range, iou_best_n]).square().sum())
+#     batch_scale = 1.0 / batch_size
+#     return batch_scale * loss_box, batch_scale * loss_obj, batch_scale * loss_cls
 
 
 @torch.no_grad()
@@ -147,3 +304,6 @@ class YoloV3LossMetric:
 
     def get_metrics(self) -> Dict[str, float]:
         return {k: float(v) / self.total for k, v in self.metric_dict.items()}
+
+
+YoloV1LossMetric = YoloV3LossMetric

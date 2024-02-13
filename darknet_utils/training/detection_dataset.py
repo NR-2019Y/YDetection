@@ -2,9 +2,10 @@ import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
+import torchvision.transforms
 import torchvision.transforms.functional as Fv
 import glob
-from typing import Sequence, List
+from typing import Sequence, List, Optional
 from torch.utils.data import DataLoader, Dataset
 import os.path as osp
 
@@ -29,7 +30,8 @@ def get_labels(label_paths: Sequence[str]) -> List[torch.Tensor]:
 
 class YoloDataset(Dataset):
     def __init__(self, image_dir: str, label_dir: str,
-                 input_height: int, input_width: int):
+                 input_height: int, input_width: int,
+                 mean: Optional[List[float]] = None, std: Optional[List[float]] = None):
         super().__init__()
         image_paths = sorted(glob.glob(osp.join(image_dir, "*.jpg")))
         label_paths = sorted(glob.glob(osp.join(label_dir, "*.txt")))
@@ -42,6 +44,12 @@ class YoloDataset(Dataset):
         self.input_width = input_width
         self.image_paths = image_paths
         self.labels = get_labels(label_paths)
+        self.normalize = None
+        if mean is None:
+            assert std is None
+        else:
+            assert std is not None
+            self.normalize = torchvision.transforms.Normalize(mean=mean, std=std)
 
     def __len__(self):
         return len(self.image_paths)
@@ -53,6 +61,10 @@ class YoloDataset(Dataset):
         img_h, img_w = img.shape[:2]
         img = np.ascontiguousarray(img[..., ::-1])
         img_tensor = Fv.to_tensor(img)
+
+        if self.normalize is not None:
+            img_tensor = self.normalize(img_tensor)
+
         ratio = min(self.input_height / img_h, self.input_width / img_w)
         new_h = round(img_h * ratio)
         new_w = round(img_w * ratio)
