@@ -58,7 +58,7 @@ def main():
     cfg_file: str = cfg.cfg_file  # type: ignore
     yolo_model = YoloV3Model(cfg_file=cfg_file, weight_file=None,
                              num_classes=num_classes, na=num_anchors)
-    yolo_model.load_state_dict(torch.load(args.ckpt)["model"])
+    yolo_model.load_state_dict(torch.load(args.ckpt, map_location="cpu")["model"])
     yolo_model.eval()
     yolo_model.set_inference_mode()
 
