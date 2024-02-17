@@ -9,9 +9,9 @@ from typing import Tuple, List
 from torch.utils.data import DataLoader
 from darknet_utils.training.utils import cxcywhcls2xyxycls
 from darknet_utils.training.metric import evaluate_np
-from darknet_utils.training.loss import yolov1_loss, YoloV1LossMetric
-from darknet_utils.training.post_process import yolov1_dets, nms_dets
-from darknet_utils.training.models import YoloResnet18
+from darknet_utils.training.loss import YoloV1LossMetric as LossMetric
+from darknet_utils.training.post_process import nms_dets
+from yolo_resnet18_ex2 import YoloResnet18, yolo_dets_ex, yolo_loss_ex
 from darknet_utils.training.detection_dataset_aug import (
     Compose, YoloDataset, ImageTransform, RandomFlipLR, RandomResizePad, collate_fn)
 from torch.utils.tensorboard import SummaryWriter
@@ -152,19 +152,19 @@ def main():
     save_freq: int = cfg.save_freq  # type: ignore
     class_names: List[str] = cfg.class_names  # type: ignore
     num_classes: int = len(class_names)
-    num: int = cfg.num  # type: ignore
+    wh_scales: List[float] = cfg.wh_scales  # type: ignore
+    num: int = len(wh_scales) // 2
 
     loss_kw = dict(
-        num=num,
         num_classes=num_classes,
+        wh_scales=wh_scales,  # type: ignore
         obj_scale=cfg.obj_scale,  # type: ignore
         no_obj_scale=cfg.no_obj_scale,  # type: ignore
         cls_scale=cfg.cls_scale,  # type: ignore
         coord_scale=cfg.coord_scale,  # type: ignore
-        use_sqrt=cfg.use_sqrt,  # type: ignore
         rescore=cfg.rescore  # type: ignore
     )
-    dets_kw = dict(num=num, num_classes=num_classes, use_sqrt=cfg.use_sqrt)  # type: ignore
+    dets_kw = dict(num_classes=num_classes, wh_scales=wh_scales)  # type: ignore
 
     yolo_model = YoloResnet18(num=num, num_classes=num_classes).to(device)
     logger = logging.getLogger()
@@ -187,8 +187,8 @@ def main():
     lr_updater = LRUpdater(optim, base_lr=base_lr, warm_up_epochs=warm_up_epochs,
                            lr_steps=lr_steps, num_batch_each_epoch=len(train_dataloader))
 
-    train_metric = YoloV1LossMetric()
-    val_metric = YoloV1LossMetric()
+    train_metric = LossMetric()
+    val_metric = LossMetric()
 
     for epoch in range(epochs):
         yolo_model.train()
@@ -200,11 +200,11 @@ def main():
             imgs = imgs.to(device)
             target_list_device = tuple(t.to(device) for t in target_list)
             preds = yolo_model(imgs)
-            losses = yolov1_loss(preds, target_list_device, **loss_kw)
+            losses = yolo_loss_ex(preds, target_list_device, **loss_kw)
             (losses[0] + losses[1] + losses[2]).backward()
             optim.step()
             train_metric.update(losses, len(target_list))
-            batch_dets = yolov1_dets(preds.detach(), **dets_kw)
+            batch_dets = yolo_dets_ex(preds.detach(), **dets_kw)
             for dets, target in zip(batch_dets.detach(), target_list):
                 dets = nms_dets(dets)
                 train_pred_bboxes.append(dets.cpu().numpy())
@@ -227,8 +227,8 @@ def main():
                 imgs = imgs.to(device)
                 target_list_device = tuple(t.to(device) for t in target_list)
                 preds = yolo_model(imgs)
-                losses = yolov1_loss(preds, target_list_device, **loss_kw)
-                batch_dets = yolov1_dets(preds.detach(), **dets_kw)
+                losses = yolo_loss_ex(preds, target_list_device, **loss_kw)
+                batch_dets = yolo_dets_ex(preds.detach(), **dets_kw)
                 val_metric.update(losses, len(target_list))
                 for dets, target in zip(batch_dets.detach(), target_list):
                     dets = nms_dets(dets)
